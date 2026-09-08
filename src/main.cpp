@@ -7,6 +7,7 @@
 #include <ArduinoJson.h>
 #include "config.h"
 #include "wav.h"
+#include "settings.h"
 
 M5Canvas canvas(&M5Cardputer.Display);
 
@@ -22,16 +23,21 @@ size_t recordedSamples = 0;
 unsigned long recordStartedAt = 0;
 
 void drawStatus(const String &title, const String &body, uint16_t color) {
-  canvas.fillScreen(TFT_BLACK);
-  canvas.setTextColor(TFT_WHITE);
+  const Theme &t = THEMES[gSettings.themeIndex];
+  canvas.fillScreen(t.bg);
+  canvas.setTextColor(t.primary);
   canvas.setTextSize(1);
   canvas.setCursor(4, 4);
   canvas.print(WiFi.status() == WL_CONNECTED ? "wifi ok" : "wifi ...");
+  canvas.setCursor(180, 4);
+  canvas.print("[S]ettings");
+
   canvas.setTextColor(color);
   canvas.setTextSize(2);
   canvas.setCursor(4, 20);
   canvas.print(title);
-  canvas.setTextColor(TFT_WHITE);
+
+  canvas.setTextColor(t.primary);
   canvas.setTextSize(1);
   canvas.setCursor(4, 48);
   int lineLen = 34;
@@ -160,9 +166,12 @@ void stopRecordingAndSend() {
 }
 
 void connectWiFi() {
+  if (!settingsHasWifi()) {
+    settingsRunWifiSetup();
+  }
   WiFi.mode(WIFI_STA);
-  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
-  drawStatus("Connecting", WIFI_SSID, TFT_CYAN);
+  WiFi.begin(gSettings.wifiSsid.c_str(), gSettings.wifiPassword.c_str());
+  drawStatus("Connecting", gSettings.wifiSsid, TFT_CYAN);
   unsigned long start = millis();
   while (WiFi.status() != WL_CONNECTED && millis() - start < 20000) {
     delay(250);
@@ -170,7 +179,7 @@ void connectWiFi() {
   if (WiFi.status() == WL_CONNECTED) {
     drawStatus("Pulse online", WiFi.localIP().toString(), TFT_GREEN);
   } else {
-    drawStatus("WiFi failed", "check config.h creds", TFT_RED);
+    drawStatus("WiFi failed", "press S for settings", TFT_RED);
   }
 }
 
@@ -179,17 +188,30 @@ void setup() {
   M5Cardputer.begin(cfg);
   canvas.createSprite(M5Cardputer.Display.width(), M5Cardputer.Display.height());
   canvas.setTextWrap(false);
+
+  settingsLoad();
+  settingsApplyDisplayAndAudio();
   connectWiFi();
 }
 
 void loop() {
   M5Cardputer.update();
+
   bool enterHeld = M5Cardputer.Keyboard.isKeyPressed(KEY_ENTER);
+
+  if (!recording && M5Cardputer.Keyboard.isKeyPressed('s')) {
+    settingsRunMenu();
+    settingsApplyDisplayAndAudio();
+    if (WiFi.status() != WL_CONNECTED) connectWiFi();
+    return;
+  }
+
   if (enterHeld && !recording) {
     startRecording();
   } else if (!enterHeld && recording) {
     stopRecordingAndSend();
   }
+
   if (recording) {
     size_t room = recordCapacitySamples - recordedSamples;
     if (room > 0) {
@@ -201,6 +223,7 @@ void loop() {
     }
     return;
   }
+
   unsigned long now = millis();
   if (now - lastPollAt > POLL_INTERVAL_MS && WiFi.status() == WL_CONNECTED) {
     lastPollAt = now;
